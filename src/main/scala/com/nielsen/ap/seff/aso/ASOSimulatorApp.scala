@@ -46,6 +46,12 @@ class ConnectASOSimulator(val spark: SparkSession) {
     println("▪" * 80)
   }
 
+  def printDataset(name: String, df: DataFrame, isInput: Boolean = false): Unit = {
+    val stage = if (isInput) "INPUT DATASET" else "TRANSFORMED OUTPUT DATASET"
+    println(s"\n[📦 SPARK LOGS | $stage: $name]")
+    df.show(truncate = false)
+  }
+
   // ==========================================
   // STAGE 1: PRE-PUBLISHING / PREVIEW DAG
   // ==========================================
@@ -58,7 +64,7 @@ class ConnectASOSimulator(val spark: SparkSession) {
     )).toDF("exec_id", "analysis_id", "region", "category_scope", "sales_share_threshold", "char_delivery_mode", "excluded_retailer")
     
     deltaStore("Study_Specs") = specsDF
-    specsDF.show(truncate = false)
+    printDataset("Study_Specs (Configuration Array)", specsDF)
   }
 
   def taskMarketDefinition(): Unit = {
@@ -72,9 +78,11 @@ class ConnectASOSimulator(val spark: SparkSession) {
     
     val marketMap = Seq((1000, "Focus Geo"), (4001, "National Bench")).toDF("geo_id", "geo_name")
     
+    printDataset("Raw Store Array", rawStores, isInput = true)
+    
     val mappedStores = rawStores.join(marketMap, "geo_id")
     deltaStore("Mapped_Stores") = mappedStores
-    mappedStores.show(truncate = false)
+    printDataset("Mapped_Stores (Geo Linked)", mappedStores)
   }
 
   def taskCategoryDefinition(): Unit = {
@@ -86,11 +94,13 @@ class ConnectASOSimulator(val spark: SparkSession) {
       ("999999999", "COLGATE TOOTHPASTE", "ORAL CARE")
     ).toDF("upc", "brand", "category")
     
+    printDataset("Raw Product Master Catalog", rawProducts, isInput = true)
+    
     val categoryScope = deltaStore("Study_Specs").select("category_scope").first().getString(0)
     val activeProducts = rawProducts.filter($"category".contains("HAIR"))
     
     deltaStore("Active_Products") = activeProducts
-    activeProducts.show(truncate = false)
+    printDataset("Active_Products (Filtered by Payload)", activeProducts)
   }
 
   // ==========================================
@@ -109,6 +119,8 @@ class ConnectASOSimulator(val spark: SparkSession) {
     val activeProducts = deltaStore("Active_Products")
     val joinedTxn = rawTxn.join(activeProducts, "upc")
     
+    printDataset("Base Micro Transactions (Joined with Products)", joinedTxn, isInput = true)
+    
     val isMasked = deltaStore("Study_Specs").select("char_delivery_mode").first().getString(0) == "Masked"
     
     val preppedTxn = if(isMasked) {
@@ -116,7 +128,7 @@ class ConnectASOSimulator(val spark: SparkSession) {
     } else joinedTxn
     
     deltaStore("Prepped_Txn") = preppedTxn
-    preppedTxn.show(truncate = false)
+    printDataset("Prepped_Txn (Masking Applied)", preppedTxn)
   }
 
   def taskAsoDataRestriction(): Unit = {
@@ -127,11 +139,13 @@ class ConnectASOSimulator(val spark: SparkSession) {
     
     val txnWithStore = deltaStore("Prepped_Txn").join(stores, "store_id")
     
+    printDataset("Input Transactions (Pre-Restriction)", txnWithStore, isInput = true)
+    
     // Applying business logic restriction dynamically
     val restrictedTxn = txnWithStore.filter(!$"store_name".contains(excludedRetailer))
     
     deltaStore("Restricted_Txn") = restrictedTxn
-    restrictedTxn.show(truncate = false)
+    printDataset("Restricted_Txn (Walmart Purged)", restrictedTxn)
   }
 
   // ==========================================
@@ -141,18 +155,23 @@ class ConnectASOSimulator(val spark: SparkSession) {
   def taskAsoModelBuildUniverse(): Unit = {
     printExecutiveSummary("ASO_MODEL_BUILD_UNIVERSE", "Expands transaction ledger with Covariate structural columns")
     
-    val universe = deltaStore("Restricted_Txn")
+    val inputTxn = deltaStore("Restricted_Txn")
+    printDataset("Input Restricted_Txn", inputTxn, isInput = true)
+    
+    val universe = inputTxn
       .withColumn("is_focus_geo", when($"geo_name" === "Focus Geo", 1).otherwise(0))
       .withColumn("is_target_retailer", when($"store_name".contains("Target"), 1).otherwise(0))
       
     deltaStore("Universe") = universe
-    universe.show(truncate = false)
+    printDataset("Universe (Covariates Appended)", universe)
   }
 
   def taskAsoModelProductDefinitionLeg1(): Unit = {
     printExecutiveSummary("ASO_MODEL_PRODUCT_DEFINITION", "Engineers automatic structural parent-child hierarchy & applies dynamic pruning")
     
     val universe = deltaStore("Universe")
+    printDataset("Input Universe Model Space", universe, isInput = true)
+    
     val totalSales = universe.agg(sum("sales")).first().getDouble(0)
     val threshold = deltaStore("Study_Specs").select("sales_share_threshold").first().getDouble(0)
     
@@ -161,7 +180,7 @@ class ConnectASOSimulator(val spark: SparkSession) {
       .withColumn("node_flag", when($"share_pct" < threshold, lit("AO LOW DIST")).otherwise(lit("Active Focus Node")))
       
     deltaStore("Hierarchy") = hierarchy
-    hierarchy.show(truncate = false)
+    printDataset("Hierarchy (Structural Groups Assessed)", hierarchy)
   }
 
   // ==========================================
@@ -172,32 +191,38 @@ class ConnectASOSimulator(val spark: SparkSession) {
     printExecutiveSummary("ASO_RMS_PRE_AGGREGATION", "Collapses UPC level grain into Brand / Macro-Line store combinations")
     
     val universe = deltaStore("Universe")
+    printDataset("Raw Item-Grain Store Sales", universe, isInput = true)
+    
     val aggTxn = universe.groupBy("store_id", "brand")
       .agg(sum("sales").alias("total_sales"), sum("units").alias("total_units"))
       
     deltaStore("Agg_Txn") = aggTxn
-    aggTxn.show(truncate = false)
+    printDataset("Agg_Txn (Collapsed Grain)", aggTxn)
   }
 
   def taskAsoSlowMover(): Unit = {
     printExecutiveSummary("ASO_SLOW_MOVER", "Imputation for data sparsity stabilization across tracking arrays")
     
     val aggTxn = deltaStore("Agg_Txn")
+    printDataset("Base Aggregated Fact Array", aggTxn, isInput = true)
+    
     // Inject micro epsilons to stabilize downstream log denominators
     val slowMover = aggTxn.withColumn("total_sales", when($"total_sales" < 50, $"total_sales" + 0.00001).otherwise($"total_sales"))
     
     deltaStore("Slow_Mover") = slowMover
-    slowMover.show(truncate = false)
+    printDataset("Slow_Mover (Imputed Zeroes)", slowMover)
   }
 
   def taskAsoRmsFactGeneration(): Unit = {
     printExecutiveSummary("ASO_RMS_FACT_GENERATION", "Derives historical velocity facts (Rate Of Sales)")
     
     val slowMover = deltaStore("Slow_Mover")
+    printDataset("Imputed Sales Array", slowMover, isInput = true)
+    
     val rmsFact = slowMover.withColumn("ROS_fact", round($"total_sales" / $"total_units", 2))
     
     deltaStore("Rms_Fact") = rmsFact
-    rmsFact.show(truncate = false)
+    printDataset("Rms_Fact (Computed Velocities)", rmsFact)
   }
 
   // ==========================================
@@ -208,35 +233,41 @@ class ConnectASOSimulator(val spark: SparkSession) {
     printExecutiveSummary("MIXED_MODEL_NAG", "Mixed Effects evaluation to compute base coefficient elasticity vectors (Direct Impact)")
     
     val rmsFact = deltaStore("Rms_Fact")
+    printDataset("Historical Fact Matrix", rmsFact, isInput = true)
+    
     // Formula simulation: DI is intrinsically tied to ROS factored by seasonal constraints
     val mixedModel = rmsFact.withColumn("direct_impact_raw", round($"ROS_fact" * 1.35, 2))
     
     deltaStore("Mixed_Model") = mixedModel
-    mixedModel.show(truncate = false)
+    printDataset("Mixed_Model (Elasticity Derived)", mixedModel)
   }
 
   def taskCoefficientAdjustments(): Unit = {
     printExecutiveSummary("COEFFICIENT_ADJUSTMENTS", "Operational Reliability Guardrails: Clamping Direct Impact metrics")
     
     val mixedModel = deltaStore("Mixed_Model")
+    printDataset("Raw Mathematical Models", mixedModel, isInput = true)
+    
     // Limit constraint: Direct Impact cannot logically exceed 150% of its ROS
     val adjustedModel = mixedModel.withColumn("di_clamped", 
       when($"direct_impact_raw" > ($"ROS_fact" * 1.5), $"ROS_fact" * 1.5).otherwise($"direct_impact_raw"))
       
     deltaStore("Adjusted_Model") = adjustedModel
-    adjustedModel.show(truncate = false)
+    printDataset("Adjusted_Model (Statistically Clamped)", adjustedModel)
   }
 
   def taskQmatrixGeneration(): Unit = {
     printExecutiveSummary("ASO_MODEL_GENERATION (Q-MATRIX)", "Constructs relational mathematical substitution matrices (Loyalty / Switching)")
     
     val adjustedModel = deltaStore("Adjusted_Model")
+    printDataset("Constrained Impact Matrix", adjustedModel, isInput = true)
+    
     // Diagonal element evaluation
     val qMatrix = adjustedModel.withColumn("loyalty_index", 
       greatest(lit(0.005), lit(1.0) - round($"di_clamped" / $"ROS_fact", 4)))
       
     deltaStore("QMatrix") = qMatrix
-    qMatrix.show(truncate = false)
+    printDataset("QMatrix (Loyalty Substitution Ledger)", qMatrix)
   }
 
   // ==========================================
@@ -247,16 +278,20 @@ class ConnectASOSimulator(val spark: SparkSession) {
     printExecutiveSummary("STORE_RATE_OF_SALES", "Granular physical velocity tracking by localized Store IDs")
     
     val qMatrix = deltaStore("QMatrix")
+    printDataset("Macro Relational Matrix", qMatrix, isInput = true)
+    
     val storeVelocity = qMatrix.groupBy("store_id").agg(avg("ROS_fact").alias("store_avg_velocity"))
     
     deltaStore("Store_Velocity") = storeVelocity
-    storeVelocity.show(truncate = false)
+    printDataset("Store_Velocity (Physical Aggregation)", storeVelocity)
   }
 
   def taskStoreAssortmentRecommendation(): Unit = {
     printExecutiveSummary("STORE_ASSORTMENT_RECOMMENDATION", "Engineers final Keep/Remove decisions optimizing ROS boundaries")
     
     val qMatrix = deltaStore("QMatrix")
+    printDataset("Input Substitution Framework", qMatrix, isInput = true)
+    
     // Rank products partitioned by Store based on Loyalty & Velocity
     val windowSpec = Window.partitionBy("store_id").orderBy(desc("ROS_fact"), desc("loyalty_index"))
     
@@ -270,7 +305,7 @@ class ConnectASOSimulator(val spark: SparkSession) {
       .withColumn("total_sales", format_string("$%.2f", $"total_sales"))
       .withColumn("forecast_sales", format_string("$%.2f", $"forecast_sales"))
       
-    finalOutput.show(truncate = false)
+    printDataset("Final Store Assortment Recommendation Output", finalOutput)
   }
 
   def executeSimulation(): Unit = {
