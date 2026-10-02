@@ -5,12 +5,13 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import org.apache.spark.sql.{SparkSession, DataFrame}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.Window
 
 object ASOSimulatorApp {
   def main(args: Array[String]): Unit = {
     // Initialize SparkSession for local execution with in-memory datasets
     val spark = SparkSession.builder()
-      .appName("Connect ASO Simulation with DataFrames")
+      .appName("Connect ASO True Execution Pipeline")
       .master("local[*]")
       .getOrCreate()
 
@@ -25,44 +26,24 @@ object ASOSimulatorApp {
 }
 
 class ConnectASOSimulator(val spark: SparkSession) {
-  // Import implicits for seamless Sequence to DataFrame conversion (.toDF)
+  // Import implicits for seamless Sequence to DataFrame conversion
   import spark.implicits._
 
-  // Unpacking global system variables representing the UI payload
-  val execId: String = sys.env.getOrElse("EXECUTION_ID", "7001662")
-  val analysisId: String = sys.env.getOrElse("ANALYSIS_ID", "11003982")
-  val versionId: String = sys.env.getOrElse("VERSION_ID", "7000988")
-  val region: String = sys.env.getOrElse("GEN2REGION", "US")
-  val env: String = sys.env.getOrElse("GEN2ENVIRONMENT", "UAT")
-  val simMode: String = sys.env.getOrElse("SIMULATION_MODE", "N").toUpperCase
-  val initialStage: String = sys.env.getOrElse("STUDY_STAGE", "segmentation").toLowerCase
-
-  // Simulated Delta Lake System-Of-Record (SOR) Storage Registers
-  val deltaStore: mutable.Map[String, Any] = mutable.Map()
-
-  val TAU_FLOOR = 0.15
-  val SKEWNESS_FACTOR = 0.94
+  // Global Pipeline Configurations
+  val execId: String = "7001662"
+  val analysisId: String = "11003982"
+  
+  // Delta Lake SOR simulating intermediate checkpoints between DAGs
+  val deltaStore: mutable.Map[String, DataFrame] = mutable.Map()
 
   println("=" * 100)
-  println(s"🧬 CONNECT ASO PIPELINE INITIALIZED FOR EXECUTION ID: $execId | REGION: $region")
+  println(s"🧬 CONNECT ASO PIPELINE INITIALIZED WITH ACTIVE SPARK TRANSFORMATIONS")
   println("=" * 100)
 
-  def printExecutiveSummary(taskName: String, layer: String, scope: String, desc: String): Unit = {
+  def printExecutiveSummary(taskName: String, desc: String): Unit = {
     println("\n" + "▪" * 80)
-    println(s"📊 EXECUTIVE SUMMARY: $taskName")
-    println(s"  • Architecture Layer : $layer")
-    println(s"  • Operational Scope  : $scope")
-    println(s"  • Business Objective : $desc")
+    println(s"📊 $taskName : $desc")
     println("▪" * 80)
-  }
-
-  def printLogs(taskName: String, logs: Map[String, String]): Unit = {
-    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"))
-    println(s"\n🚀 [$timestamp] [INFO] [$taskName] Starting cluster thread pool allocation...")
-    logs.foreach { case (key, value) =>
-      println(s"   ↳ [$taskName] ${key.toUpperCase}: $value")
-    }
-    println(s"✅ [$timestamp] [INFO] [$taskName] Task transaction state committed. Releasing resource tokens.")
   }
 
   // ==========================================
@@ -70,80 +51,46 @@ class ConnectASOSimulator(val spark: SparkSession) {
   // ==========================================
   
   def taskSaveUserRequest(): Unit = {
-    printExecutiveSummary(
-      "SAVE_USER_REQUEST", 
-      "Airflow Orchestrator ──► Scala JAR Core Driver Component",
-      "Metadata Hydration Layer",
-      "Extracts raw configurations from UI payload string and builds the core Delta System of Record."
-    )
+    printExecutiveSummary("SAVE_USER_REQUEST", "Hydrates execution specifications from JSON string payload")
     
-    // In-Memory DataFrame Representation of Configuration Matrix
     val specsDF = Seq((
-      execId, analysisId, versionId, region, simMode, initialStage,
-      "TOTAL HAIR CARE", 20, 0.05, 10, "Masked", """["WALMART_PL_RULE"]"""
-    )).toDF("execution_id", "analysis_id", "version_id", "region", "simulation_mode", "study_stage",
-      "category_scope", "max_number_nodes", "sales_share_threshold", "distribution_threshold", "char_delivery_mode", "excluded_restrictions")
+      execId, analysisId, "US", "TOTAL HAIR CARE", 0.05, "Masked", "Walmart"
+    )).toDF("exec_id", "analysis_id", "region", "category_scope", "sales_share_threshold", "char_delivery_mode", "excluded_retailer")
     
     deltaStore("Study_Specs") = specsDF
-    
-    printLogs("SAVE_USER_REQUEST", Map(
-      "driver_class" -> "com.nielsen.ap.seff.aso.saveTable.ASOSaveTableDriver",
-      "ingested_keys" -> "Exploded 14 runtime variables into explicit storage entries",
-      "delta_write_target" -> s"seff_aso_${region.toLowerCase}_${env.toLowerCase}_delta.${analysisId}_Study_Specs"
-    ))
-    
-    println("\n[📝 Spark Dataset: Study Specs Configuration]")
     specsDF.show(truncate = false)
   }
 
   def taskMarketDefinition(): Unit = {
-    printExecutiveSummary(
-      "MARKET_DEFINITION",
-      "Scala JAR Driver API over Snowflake JDBC Boundary",
-      "Geographical Boundary Structuring",
-      "Parses regional store lists to allocate custom Execution Areas (EA) and Lookalike Benchmarks (BM)."
-    )
+    printExecutiveSummary("MARKET_DEFINITION", "Joins physical stores to execution boundaries via Geo indexing")
     
-    val marketData = Seq(
-      (1000, "Club Total Focus Geo", "T", 4001),
-      (1001, "Costco Specific Tier", "T", 4001),
-      (4001, "National Market Benchmark", "C", 4001)
-    )
-    val marketDF = marketData.toDF("geo_id", "geo_name", "mas_role", "benchmark_market_id")
-    deltaStore("study_markets_df") = marketDF
+    val rawStores = Seq(
+      (1, "Store Target NY", 1000),
+      (2, "Store Walmart TX", 1000), 
+      (3, "Store CVS CA", 4001)
+    ).toDF("store_id", "store_name", "geo_id")
     
-    printLogs("MARKET_DEFINITION", Map(
-      "driver_class" -> "com.nielsen.ap.seff.aso.marketDefinition.ASOMarketDefDriver",
-      "active_allocation" -> "Assigned 1,240 stores into Focus Geo 1000"
-    ))
+    val marketMap = Seq((1000, "Focus Geo"), (4001, "National Bench")).toDF("geo_id", "geo_name")
     
-    println("\n[📝 Spark Dataset: Market Definition]")
-    marketDF.show(truncate = false)
-  }
-
-  def taskPeriodDefinition(): Unit = {
-    printExecutiveSummary(
-      "PERIOD_DEFINITION",
-      "Scala JAR Driver Framework Matrix",
-      "Temporal Windows Construction",
-      "Calculates bounding indices for application timelines, establishing strict historical baselines."
-    )
-    
-    val periodData = Seq(
-      ("HISTORICAL", "202401", "202635", 104),
-      ("MODEL_ACTIVE", "202535", "202635", 52),
-      ("YEAR_AGO", "202435", "202535", 52)
-    )
-    val periodDF = periodData.toDF("window_type", "start_week", "end_week", "duration_weeks")
-    
-    printLogs("PERIOD_DEFINITION", Map("driver_class" -> "com.nielsen.ap.seff.aso.periodDefinition.ASOPeriodDefDriver"))
-    
-    println("\n[📝 Spark Dataset: Temporal Windows]")
-    periodDF.show(truncate = false)
+    val mappedStores = rawStores.join(marketMap, "geo_id")
+    deltaStore("Mapped_Stores") = mappedStores
+    mappedStores.show(truncate = false)
   }
 
   def taskCategoryDefinition(): Unit = {
-    printExecutiveSummary("CATEGORY_DEFINITION", "Scala JAR Engine Interface Core", "Product Inventory Scoping", "Filters upstream product universes down to target evaluation boundaries.")
+    printExecutiveSummary("CATEGORY_DEFINITION", "Filters product universe based on payload inclusion logic")
+    
+    val rawProducts = Seq(
+      ("3600523456789", "LOREAL ELVIVE", "HAIR CARE"),
+      ("111222333", "PRIVATE LABEL SHAMPOO", "HAIR CARE"),
+      ("999999999", "COLGATE TOOTHPASTE", "ORAL CARE")
+    ).toDF("upc", "brand", "category")
+    
+    val categoryScope = deltaStore("Study_Specs").select("category_scope").first().getString(0)
+    val activeProducts = rawProducts.filter($"category".contains("HAIR"))
+    
+    deltaStore("Active_Products") = activeProducts
+    activeProducts.show(truncate = false)
   }
 
   // ==========================================
@@ -151,35 +98,40 @@ class ConnectASOSimulator(val spark: SparkSession) {
   // ==========================================
 
   def taskAsoRmsDataPreparation(): Unit = {
-    printExecutiveSummary(
-      "ASO_RMS_DATA_PREPARATION",
-      "Scala Shaded Maven Jar Execution Class Node",
-      "Micro Transaction Consolidation",
-      "Aggregates store-level transaction streams and normalizes metrics based on regional rules."
-    )
+    printExecutiveSummary("ASO_RMS_DATA_PREPARATION", "Cross joins active stores/products with base transactions & applies PI masking")
     
-    val rawTransactions = Seq(
-      ("3600523456789", "LOREAL ELVIVE", 100234, 150.0, 15, "HAIR CARE"),
-      ("111222333", "PRIVATE LABEL SHAMPOO", 100234, 45.0, 5, "HAIR CARE")
-    )
-    val txnDF = rawTransactions.toDF("upc", "brand", "store_id", "sales", "units", "category")
+    val rawTxn = Seq(
+      ("3600523456789", 1, 150.0, 15),
+      ("111222333", 1, 45.0, 5),
+      ("3600523456789", 2, 200.0, 20)
+    ).toDF("upc", "store_id", "sales", "units")
     
-    // Simulate masking transformation on a Spark DataFrame
-    val processedDF = txnDF
-      .withColumn("brand", when($"brand" === "PRIVATE LABEL SHAMPOO", lit("0000MASKED")).otherwise($"brand"))
-      .withColumn("upc", when($"brand" === "0000MASKED", lit("MASKED_UPC")).otherwise($"upc"))
+    val activeProducts = deltaStore("Active_Products")
+    val joinedTxn = rawTxn.join(activeProducts, "upc")
     
-    printLogs("ASO_RMS_DATA_PREPARATION", Map(
-      "driver_class" -> "com.nielsen.ap.seff.aso.dataPrep.AESDataPrepDriver",
-      "masking_records" -> "Sensitive branded items padded to '0000MASKED' dynamically inside Spark"
-    ))
+    val isMasked = deltaStore("Study_Specs").select("char_delivery_mode").first().getString(0) == "Masked"
     
-    println("\n[📝 Spark Dataset: Processed RMS Data (Masking Evaluation)]")
-    processedDF.show(truncate = false)
+    val preppedTxn = if(isMasked) {
+      joinedTxn.withColumn("brand", when($"brand" === "PRIVATE LABEL SHAMPOO", lit("0000MASKED")).otherwise($"brand"))
+    } else joinedTxn
+    
+    deltaStore("Prepped_Txn") = preppedTxn
+    preppedTxn.show(truncate = false)
   }
 
   def taskAsoDataRestriction(): Unit = {
-    printExecutiveSummary("ASO_DATA_RESTRICTION", "Scala Rule Engine Drools Validation Network", "Compliance & Governance Guardrails", "Applies regional distribution exclusions.")
+    printExecutiveSummary("ASO_DATA_RESTRICTION", "Releasability Rule Engine: Purges explicit restricted retail transactions")
+    
+    val excludedRetailer = deltaStore("Study_Specs").select("excluded_retailer").first().getString(0)
+    val stores = deltaStore("Mapped_Stores")
+    
+    val txnWithStore = deltaStore("Prepped_Txn").join(stores, "store_id")
+    
+    // Applying business logic restriction dynamically
+    val restrictedTxn = txnWithStore.filter(!$"store_name".contains(excludedRetailer))
+    
+    deltaStore("Restricted_Txn") = restrictedTxn
+    restrictedTxn.show(truncate = false)
   }
 
   // ==========================================
@@ -187,171 +139,169 @@ class ConnectASOSimulator(val spark: SparkSession) {
   // ==========================================
 
   def taskAsoModelBuildUniverse(): Unit = {
-    printExecutiveSummary("ASO_MODEL_BUILD_UNIVERSE", "Python Wheel Computational Core Module", "Statistical Covariate Generation", "Maps store-level characteristics.")
+    printExecutiveSummary("ASO_MODEL_BUILD_UNIVERSE", "Expands transaction ledger with Covariate structural columns")
+    
+    val universe = deltaStore("Restricted_Txn")
+      .withColumn("is_focus_geo", when($"geo_name" === "Focus Geo", 1).otherwise(0))
+      .withColumn("is_target_retailer", when($"store_name".contains("Target"), 1).otherwise(0))
+      
+    deltaStore("Universe") = universe
+    universe.show(truncate = false)
   }
 
   def taskAsoModelProductDefinitionLeg1(): Unit = {
-    printExecutiveSummary(
-      "ASO_MODEL_PRODUCT_DEFINITION (LEG 1)",
-      "Python Wheel Cluster Distributed Architecture",
-      "Hierarchy Compilation & Pruning",
-      "Builds the automatic assortment tree structure while pruning small nodes into 'ALL OTHER'."
-    )
+    printExecutiveSummary("ASO_MODEL_PRODUCT_DEFINITION", "Engineers automatic structural parent-child hierarchy & applies dynamic pruning")
     
-    val treeData = Seq(
-      ("TOTAL HAIR CARE", "HAIR CARE", "SHAMPOO", "LOREAL ELVIVE", 12.4, "Active Focus"),
-      ("TOTAL HAIR CARE", "HAIR CARE", "SHAMPOO", "PANTENE PRO-V", 10.1, "Active Sibling"),
-      ("TOTAL HAIR CARE", "HAIR CARE", "SHAMPOO", "ALL OTHER", 4.2, "Compressed Node"),
-      ("TOTAL HAIR CARE", "HAIR CARE", "STYLING", "LOREAL STUDIO", 8.6, "Active Focus"),
-      ("TOTAL HAIR CARE", "HAIR CARE", "STYLING", "AO LOW DIST", 1.1, "Compressed Node")
-    )
+    val universe = deltaStore("Universe")
+    val totalSales = universe.agg(sum("sales")).first().getDouble(0)
+    val threshold = deltaStore("Study_Specs").select("sales_share_threshold").first().getDouble(0)
     
-    val treeDF = treeData.toDF("mega_category", "segment", "subnode_group", "brand_node_name", "category_share_pct", "engine_flag")
-    
-    printLogs("ASO_MODEL_PRODUCT_DEFINITION", Map(
-      "entry_script" -> "aso_task_main_aes.py ──► auto_product_hierarchy.py",
-      "all_other_allocation" -> "Identified 34 low-velocity SKUs; compressed records into node 'AO LOW DISTRIBUTION'"
-    ))
-    
-    println("\n[📝 Spark Dataset: Tree Structure Simulation - Top Sibling Branches]")
-    treeDF.show(truncate = false)
-  }
-
-  def taskAsoExportSegmentationModel(): Unit = {
-    printExecutiveSummary("ASO_EXPORT_SEGMENTATION_MODEL", "Scala Integration File System Pipeline", "Leg 1 Interface Handoff Gate", "Flattens the product tree structure and writes out an editable CSV file to ADLS storage.")
-    println("\n🛑 LEG 1 SEQUENCE COMPLETION HALT: Pipeline paused successfully. Awaiting human tree refinement file upload.")
+    val hierarchy = universe.groupBy("brand").agg(sum("sales").alias("brand_sales"))
+      .withColumn("share_pct", round(($"brand_sales" / totalSales), 4))
+      .withColumn("node_flag", when($"share_pct" < threshold, lit("AO LOW DIST")).otherwise(lit("Active Focus Node")))
+      
+    deltaStore("Hierarchy") = hierarchy
+    hierarchy.show(truncate = false)
   }
 
   // ==========================================
   // STAGE 4: PIPELINE RESUMPTION & CONNECT DAG (LEG 2)
   // ==========================================
-  
-  def taskAsoImportSegmentationModel(): Unit = {
-    println("\n" + "="*100)
-    println("▶️ INITIALIZING PHASE 2 / LEG 2 PIPELINE TRANSITION EXECUTION WINDOW")
-    println("="*100)
-    printExecutiveSummary("ASO_IMPORT_SEGMENTATION_MODEL", "Scala Integration File System Pipeline", "Leg 2 Input Acquisition Layer", "Ingests human-refined tree definitions.")
-  }
 
   def taskAsoRmsPreAggregation(): Unit = {
-    printExecutiveSummary("ASO_RMS_PRE_AGGREGATION", "Scala High-Volume Data Transformation Engine", "Item-Grain Product Mapping Consolidation", "Removes restricted entries and rolls high-grain transactions up.")
+    printExecutiveSummary("ASO_RMS_PRE_AGGREGATION", "Collapses UPC level grain into Brand / Macro-Line store combinations")
+    
+    val universe = deltaStore("Universe")
+    val aggTxn = universe.groupBy("store_id", "brand")
+      .agg(sum("sales").alias("total_sales"), sum("units").alias("total_units"))
+      
+    deltaStore("Agg_Txn") = aggTxn
+    aggTxn.show(truncate = false)
   }
 
   def taskAsoSlowMover(): Unit = {
-    printExecutiveSummary("ASO_SLOW_MOVER", "Standalone Python Analytical Script Component", "Data Sparsity Imputation Modeling", "Identifies thin-distribution products.")
+    printExecutiveSummary("ASO_SLOW_MOVER", "Imputation for data sparsity stabilization across tracking arrays")
+    
+    val aggTxn = deltaStore("Agg_Txn")
+    // Inject micro epsilons to stabilize downstream log denominators
+    val slowMover = aggTxn.withColumn("total_sales", when($"total_sales" < 50, $"total_sales" + 0.00001).otherwise($"total_sales"))
+    
+    deltaStore("Slow_Mover") = slowMover
+    slowMover.show(truncate = false)
   }
 
   def taskAsoRmsFactGeneration(): Unit = {
-    printExecutiveSummary("ASO_RMS_FACT_GENERATION", "Scala Shaded Engine Execution Block", "Rolling Matrix Compilation Engine", "Computes baseline volumetric velocities.")
+    printExecutiveSummary("ASO_RMS_FACT_GENERATION", "Derives historical velocity facts (Rate Of Sales)")
+    
+    val slowMover = deltaStore("Slow_Mover")
+    val rmsFact = slowMover.withColumn("ROS_fact", round($"total_sales" / $"total_units", 2))
+    
+    deltaStore("Rms_Fact") = rmsFact
+    rmsFact.show(truncate = false)
   }
 
   // ==========================================
   // STAGE 5: COMPUTATIONAL MATH ENGINE CORE (LEG 2)
   // ==========================================
-  
+
   def taskGoAmanModelMixedModel(): Unit = {
-    printExecutiveSummary("goAmanModel_mixedModel_NAG_by_nodeId_parent", "Python Distributed Wheel Workspace Pipeline", "Mixed-Effects Statistical Modeling Engine", "Fits distributed mixed-effects regressions.")
+    printExecutiveSummary("MIXED_MODEL_NAG", "Mixed Effects evaluation to compute base coefficient elasticity vectors (Direct Impact)")
+    
+    val rmsFact = deltaStore("Rms_Fact")
+    // Formula simulation: DI is intrinsically tied to ROS factored by seasonal constraints
+    val mixedModel = rmsFact.withColumn("direct_impact_raw", round($"ROS_fact" * 1.35, 2))
+    
+    deltaStore("Mixed_Model") = mixedModel
+    mixedModel.show(truncate = false)
   }
 
   def taskCoefficientAdjustments(): Unit = {
-    printExecutiveSummary("COEFFICIENT_ADJUSTMENTS_STAGE_1_TO_3", "Python Wheel Pipeline Utility Library", "Algorithmic Bound Boundary Clamping", "Applies operational constraints.")
+    printExecutiveSummary("COEFFICIENT_ADJUSTMENTS", "Operational Reliability Guardrails: Clamping Direct Impact metrics")
+    
+    val mixedModel = deltaStore("Mixed_Model")
+    // Limit constraint: Direct Impact cannot logically exceed 150% of its ROS
+    val adjustedModel = mixedModel.withColumn("di_clamped", 
+      when($"direct_impact_raw" > ($"ROS_fact" * 1.5), $"ROS_fact" * 1.5).otherwise($"direct_impact_raw"))
+      
+    deltaStore("Adjusted_Model") = adjustedModel
+    adjustedModel.show(truncate = false)
   }
 
   def taskQmatrixGeneration(): Unit = {
-    printExecutiveSummary("ASO_MODEL_GENERATION (Q-Matrix Constraint Pipeline)", "Python Wheel Matrix Processing Engine", "Cannibalization Substitution Interrelation Modeling", "Derives the final product substitution matrix.")
-  }
-
-  def taskGainsCalibration(): Unit = {
-    printExecutiveSummary("goGainsCorrectionTask", "Python Wheel Forecast Simulation Subsystem", "Optimization Target Parameter Calibration Loop", "Iteratively calibrates spatial scaling attributes.")
+    printExecutiveSummary("ASO_MODEL_GENERATION (Q-MATRIX)", "Constructs relational mathematical substitution matrices (Loyalty / Switching)")
+    
+    val adjustedModel = deltaStore("Adjusted_Model")
+    // Diagonal element evaluation
+    val qMatrix = adjustedModel.withColumn("loyalty_index", 
+      greatest(lit(0.005), lit(1.0) - round($"di_clamped" / $"ROS_fact", 4)))
+      
+    deltaStore("QMatrix") = qMatrix
+    qMatrix.show(truncate = false)
   }
 
   // ==========================================
   // STAGE 6: PHASE 2 ASSORTMENT RECOMMENDATION (STORE GRAIN)
   // ==========================================
-  
+
   def taskStoreRateOfSales(): Unit = {
-    printExecutiveSummary("STORE_RATE_OF_SALES (PHASE 2)", "Scala Orchestration Shell ──► Java Calculation Dependency Core", "Localized Store Grain Velocity Analysis", "Shifts calculation limits to explicitly compute localized sales velocity.")
+    printExecutiveSummary("STORE_RATE_OF_SALES", "Granular physical velocity tracking by localized Store IDs")
+    
+    val qMatrix = deltaStore("QMatrix")
+    val storeVelocity = qMatrix.groupBy("store_id").agg(avg("ROS_fact").alias("store_avg_velocity"))
+    
+    deltaStore("Store_Velocity") = storeVelocity
+    storeVelocity.show(truncate = false)
   }
 
   def taskStoreAssortmentRecommendation(): Unit = {
-    printExecutiveSummary(
-      "STORE_ASSORTMENT_RECOMMENDATION (PHASE 2 OPTIMIZER)",
-      "Scala Processing Layer ──► Java Heavy Optimization Algorithms",
-      "Localized Store Assortment Optimization",
-      "Swaps lower-ranked products for high-demand items to optimize shelf assortment within space constraints."
-    )
+    printExecutiveSummary("STORE_ASSORTMENT_RECOMMENDATION", "Engineers final Keep/Remove decisions optimizing ROS boundaries")
     
-    val recData = Seq(
-      (100234, "3600523456789", "LOREAL ELVIVE SHAMPOO", "KEEP", 84.00, 98.50, 4, 4, 14.50),
-      (100234, "0000MASKED", "PRIVATE LABEL SHAMPOO", "REMOVE", 32.00, 0.00, 2, 0, -32.00),
-      (100234, "3600529876543", "LOREAL STUDIO GEL NEW", "ADD", 0.00, 54.20, 0, 3, 54.20),
-      (100235, "3600523456789", "LOREAL ELVIVE SHAMPOO", "KEEP", 91.00, 94.10, 4, 4, 3.10)
-    )
+    val qMatrix = deltaStore("QMatrix")
+    // Rank products partitioned by Store based on Loyalty & Velocity
+    val windowSpec = Window.partitionBy("store_id").orderBy(desc("ROS_fact"), desc("loyalty_index"))
     
-    val recDF = recData.toDF(
-      "store_id", "product_barcode", "description", "action_status", "current_sales", "forecast_sales", "curr_facings", "proposed_facings", "net_yield_delta"
-    )
-    
-    printLogs("STORE_ASSORTMENT_RECOMMENDATION", Map(
-      "scala_orchestrator" -> "StoreAssortmentRecommendationCalculation.scala",
-      "optimization_iterations" -> "Iterated optimization swaps traversing between 5% and 30%"
-    ))
-
-    println("\n[📝 Spark Dataset: Final Store Assortment Recommendation Output]")
-    // Format numeric amounts into currency dynamically within Spark
-    recDF.withColumn("current_sales", format_string("$%.2f", $"current_sales"))
-         .withColumn("forecast_sales", format_string("$%.2f", $"forecast_sales"))
-         .withColumn("net_yield_delta", format_string("$%.2f", $"net_yield_delta"))
-         .show(truncate = false)
-  }
-
-  // ==========================================
-  // STAGE 7: GOVERNANCE & UI PUBLISHING
-  // ==========================================
-  
-  def taskAsoPublishing(): Unit = {
-    printExecutiveSummary("ASO_PUBLISHING", "Scala Core Relational Database Ledger Publisher", "Frontend Schema Serialization", "Transforms Delta scratch spaces into a published star schema for UI reporting.")
-  }
-
-  def taskQcChecksAndValidations(): Unit = {
-    printExecutiveSummary("QUALITY_ASSURANCE_AUTOMATION_GRID", "Multi-Script Validation Framework Suite", "Data Integrity Certification", "Runs integrity checks and compares outputs against source baselines.")
-    println("\n" + "="*100)
-    println(s"🏁 PIPELINE RUN SUCCESSFUL: Dataset 1067691 registered inside Snowflake repository.")
-    println(s" Analytical reports are now live on Connect UI application dashboard workspace views.")
-    println("="*100)
+    val recommendations = qMatrix.withColumn("rank", rank().over(windowSpec))
+      .withColumn("action_status", when($"rank" === 1, lit("KEEP")).otherwise(lit("REMOVE")))
+      .withColumn("forecast_sales", when($"action_status" === "KEEP", $"total_sales" * 1.05).otherwise(0.0))
+      .select("store_id", "brand", "action_status", "total_sales", "forecast_sales", "loyalty_index", "rank")
+      
+    // Applying native spark string formatting
+    val finalOutput = recommendations
+      .withColumn("total_sales", format_string("$%.2f", $"total_sales"))
+      .withColumn("forecast_sales", format_string("$%.2f", $"forecast_sales"))
+      
+    finalOutput.show(truncate = false)
   }
 
   def executeSimulation(): Unit = {
     taskSaveUserRequest()
     taskMarketDefinition()
-    taskPeriodDefinition()
     taskCategoryDefinition()
     
-    if (simMode == "Y") {
-      taskAsoPublishing()
-      return
-    }
-      
+    // Leg 1 Data Prep
     taskAsoRmsDataPreparation()
     taskAsoDataRestriction()
+    
+    // Leg 1 Mathematical Core
     taskAsoModelBuildUniverse()
     taskAsoModelProductDefinitionLeg1()
-    taskAsoExportSegmentationModel()
     
-    Thread.sleep(1000)
-    
-    taskAsoImportSegmentationModel()
+    // Leg 2 Resume / Model Pre-Aggregation
     taskAsoRmsPreAggregation()
     taskAsoSlowMover()
     taskAsoRmsFactGeneration()
+    
+    // Leg 2 Math Subsystem
     taskGoAmanModelMixedModel()
     taskCoefficientAdjustments()
     taskQmatrixGeneration()
-    taskGainsCalibration()
+    
+    // Phase 2 Recommender Space
     taskStoreRateOfSales()
     taskStoreAssortmentRecommendation()
     
-    taskAsoPublishing()
-    taskQcChecksAndValidations()
+    println("\n" + "="*100)
+    println(s"🏁 PIPELINE RUN SUCCESSFUL: Spark DataFrames propagated transformations successfully.")
+    println("="*100)
   }
 }
